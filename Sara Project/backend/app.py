@@ -8,7 +8,8 @@ from database import (
     save_chat, get_chat_logs, get_dashboard_stats, update_user_credentials,
     create_notification,
     get_submission_by_id,
-    get_submission_by_nip
+    get_submission_by_nip,
+    get_notifications
 )
 from flask import Flask, render_template, request, jsonify, send_from_directory, session, redirect
 from flask_cors import CORS
@@ -372,25 +373,52 @@ def send_to_hr():
         print(f"❌ Error in send_to_hr: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# ==================== GET HR CHATS (FOR ADMIN DASHBOARD) ====================
+@app.route("/api/hr-chats", methods=["GET"])
+@admin_required
+def get_hr_chats():
+    """Get all HR chats for admin dashboard"""
+    try:
+        conn = get_db_connection()
+        chats = conn.execute("""
+            SELECT * FROM hr_chats
+            ORDER BY created_at DESC
+        """).fetchall()
+        conn.close()
+        
+        print(f"📧 Retrieved {len(chats)} HR chats for admin")
+        return jsonify([dict(row) for row in chats])
+    except Exception as e:
+        print(f"❌ Error getting HR chats: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route("/admin/hr-chat")
 @admin_required
 def hr_chat():
     """View HR chat messages (admin only)"""
-    conn = get_db_connection()
-    chats = conn.execute("""
-        SELECT *
-        FROM hr_chats
-        ORDER BY created_at DESC
-    """).fetchall()
-    conn.close()
-    
-    return render_template("hr_chat.html", chats=chats)
+    try:
+        conn = get_db_connection()
+        chats = conn.execute("""
+            SELECT *
+            FROM hr_chats
+            ORDER BY created_at DESC
+        """).fetchall()
+        conn.close()
+        
+        return render_template("hr_chat.html", chats=chats)
+    except Exception as e:
+        print(f"❌ Error in hr_chat view: {str(e)}")
+        return redirect("/admin")
 
 @app.route("/admin/reply/<int:id>", methods=["POST"])
+@admin_required
 def hr_reply(id):
     """Reply to HR chat (admin only)"""
     try:
         reply = request.form.get("reply", "").strip()
+        
+        if not reply:
+            return redirect("/admin/hr-chat")
         
         conn = get_db_connection()
         conn.execute("""
@@ -603,7 +631,6 @@ def notifications():
     if "user_id" not in session:
         return redirect("/login")
     
-    from database import get_notifications
     data = get_notifications(session["user_id"])
     return render_template("notification.html", notifications=data)
 
