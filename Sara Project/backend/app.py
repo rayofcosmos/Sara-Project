@@ -317,115 +317,114 @@ def chat():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-@app.route("/api/escalate", methods=["POST"])
+# ==================== ESCALATE TO HR ROUTES ====================
+@app.route("/api/escalate-to-hr", methods=["POST"])
 def escalate_to_hr():
-
-    data = request.json
-
-    conn = get_db_connection()
-
-    conn.execute("""
-    INSERT INTO hr_chats
-    (nama, message)
-    VALUES (?, ?)
-    """,
-    (
-        data["nama"],
-        data["message"]
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({
-        "success": True,
-        "message": "Pesan telah dikirim ke HR"
-    })
+    """Escalate user question to HR - NO AUTH NEEDED"""
+    try:
+        data = request.json
+        nama = data.get('nama', '').strip()
+        message = data.get('message', '').strip()
+        
+        if not nama or not message:
+            return jsonify({'success': False, 'error': 'Nama dan pesan wajib diisi'}), 400
+        
+        # Save to database
+        conn = get_db_connection()
+        conn.execute("""
+            INSERT INTO hr_chats (nama, message, status)
+            VALUES (?, ?, ?)
+        """, (nama, message, 'pending'))
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ Escalated to HR: {nama} - {message[:50]}...")
+        return jsonify({
+            'success': True,
+            'message': 'Pertanyaan telah dikirim ke HR'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error escalating to HR: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route("/api/hr-chat", methods=["POST"])
 def send_to_hr():
-
-    data = request.json
-
-    conn = get_db_connection()
-
-    conn.execute("""
-    INSERT INTO hr_chats
-    (nama, message)
-    VALUES (?, ?)
-    """,
-    (
-        data["nama"],
-        data["message"]
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({
-        "success": True
-    })
+    """Alternative HR chat endpoint"""
+    try:
+        data = request.json
+        nama = data.get('nama', '').strip()
+        message = data.get('message', '').strip()
+        
+        if not nama or not message:
+            return jsonify({'success': False, 'error': 'Nama dan pesan wajib diisi'}), 400
+        
+        conn = get_db_connection()
+        conn.execute("""
+            INSERT INTO hr_chats (nama, message, status)
+            VALUES (?, ?, ?)
+        """, (nama, message, 'pending'))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"❌ Error in send_to_hr: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route("/admin/hr-chat")
+@admin_required
 def hr_chat():
-
+    """View HR chat messages (admin only)"""
     conn = get_db_connection()
-
     chats = conn.execute("""
-    SELECT *
-    FROM hr_chats
-    ORDER BY created_at DESC
+        SELECT *
+        FROM hr_chats
+        ORDER BY created_at DESC
     """).fetchall()
-
     conn.close()
+    
+    return render_template("hr_chat.html", chats=chats)
 
-    return render_template(
-        "hr_chat.html",
-        chats=chats
-    )
-
-@app.route("/admin/hr-reply/<int:id>",
-methods=["POST"])
+@app.route("/admin/reply/<int:id>", methods=["POST"])
 def hr_reply(id):
-
-    reply = request.form["reply"]
-
-    conn = get_db_connection()
-
-    conn.execute("""
-    UPDATE hr_chats
-    SET reply=?,
-        status='answered'
-    WHERE id=?
-    """,
-    (
-        reply,
-        id
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return redirect("/admin/hr-chat")
+    """Reply to HR chat (admin only)"""
+    try:
+        reply = request.form.get("reply", "").strip()
+        
+        conn = get_db_connection()
+        conn.execute("""
+            UPDATE hr_chats
+            SET reply = ?, status = 'answered'
+            WHERE id = ?
+        """, (reply, id))
+        conn.commit()
+        conn.close()
+        
+        print(f"✅ HR reply sent for chat ID: {id}")
+        return redirect("/admin/hr-chat")
+    except Exception as e:
+        print(f"❌ Error replying to HR chat: {str(e)}")
+        return redirect("/admin/hr-chat")
 
 @app.route("/api/hr-reply/<nama>")
 def get_reply(nama):
+    """Get HR replies for a specific user - NO AUTH NEEDED"""
+    try:
+        conn = get_db_connection()
+        chats = conn.execute("""
+            SELECT *
+            FROM hr_chats
+            WHERE nama = ?
+            ORDER BY created_at DESC
+        """, (nama,)).fetchall()
+        conn.close()
+        
+        return jsonify([dict(row) for row in chats])
+    except Exception as e:
+        print(f"❌ Error getting HR replies: {str(e)}")
+        return jsonify([]), 500
 
-    conn = get_db_connection()
-
-    chats = conn.execute("""
-    SELECT *
-    FROM hr_chats
-    WHERE nama=?
-    ORDER BY created_at DESC
-    """, (nama,)).fetchall()
-
-    conn.close()
-
-    return jsonify([
-        dict(x)
-        for x in chats
-    ])
 # ==================== SUBMISSION ROUTES ====================
 @app.route('/api/submissions', methods=['POST'])
 def create_pengajuan():
@@ -452,7 +451,7 @@ def create_pengajuan():
                     file.save(os.path.join(UPLOAD_FOLDER, filename))
                     lampiran = filename
 
-        # User ID opsional untuk anonymous submission
+        # User ID optional for anonymous submission
         user_id = session.get('user_id') if 'user_id' in session else None
         create_submission(user_id, nama, nip, jenis, tanggal_mulai, tanggal_selesai, alasan, lampiran)
         print(f"✅ Leave submission created: {nama} ({jenis}) - NIP: {nip}")
@@ -483,44 +482,50 @@ def update_status(id):
     return jsonify({'message': f'Status diubah ke {status}'})
 
 @app.route("/update_submission/<int:id>/<status>")
+@admin_required
 def update_submission(id, status):
-
-    update_submission_status(id, status)
-
-    # ambil data pengajuan
-    submission = get_submission_by_id(id)
-
-    if status == "approved":
-        create_notification(
-            submission["user_id"],
-            "Pengajuan Cuti Disetujui",
-            "Pengajuan cuti Anda telah disetujui oleh HR."
-        )
-
-    elif status == "rejected":
-        create_notification(
-            submission["user_id"],
-            "Pengajuan Cuti Ditolak",
-            "Pengajuan cuti Anda ditolak oleh HR."
-        )
-
-    return redirect("/admin")
+    """Update submission status and send notification"""
+    try:
+        update_submission_status(id, status)
+        submission = get_submission_by_id(id)
+        
+        if status == "approved":
+            create_notification(
+                submission["user_id"],
+                "Pengajuan Cuti Disetujui",
+                "Pengajuan cuti Anda telah disetujui oleh HR."
+            )
+        elif status == "rejected":
+            create_notification(
+                submission["user_id"],
+                "Pengajuan Cuti Ditolak",
+                "Pengajuan cuti Anda ditolak oleh HR."
+            )
+        
+        return redirect("/admin")
+    except Exception as e:
+        print(f"❌ Error updating submission: {str(e)}")
+        return redirect("/admin")
 
 @app.route("/api/check-status/<nip>")
 def check_status(nip):
-
-    submissions = get_submission_by_nip(nip)
-
-    if not submissions:
+    """Check submission status by NIP - NO AUTH NEEDED"""
+    try:
+        submissions = get_submission_by_nip(nip)
+        
+        if not submissions:
+            return jsonify({
+                "success": False,
+                "message": "Data tidak ditemukan"
+            })
+        
         return jsonify({
-            "success": False,
-            "message": "Data tidak ditemukan"
+            "success": True,
+            "data": submissions
         })
-
-    return jsonify({
-        "success": True,
-        "data": submissions
-    })
+    except Exception as e:
+        print(f"❌ Error checking status: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ==================== ADMIN ROUTES ====================
 @app.route('/admin')
@@ -594,16 +599,13 @@ def list_pengumuman():
 
 @app.route("/notifications")
 def notifications():
-
+    """View notifications (requires login)"""
     if "user_id" not in session:
         return redirect("/login")
-
+    
+    from database import get_notifications
     data = get_notifications(session["user_id"])
-
-    return render_template(
-        "notifications.html",
-        notifications=data
-    )
+    return render_template("notification.html", notifications=data)
 
 @app.route('/api/survey', methods=['POST'])
 def submit_survey():
@@ -617,7 +619,7 @@ def submit_survey():
         nama = data.get('nama', 'Anonim')
         saran = data.get('saran', '')
         
-        # User ID opsional untuk anonymous feedback
+        # User ID optional for anonymous feedback
         user_id = session.get('user_id') if 'user_id' in session else None
         create_rating(user_id, nama, rating, saran)
         print(f"⭐ Survey submitted: {rating} stars by {nama}")
